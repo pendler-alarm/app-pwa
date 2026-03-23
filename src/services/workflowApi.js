@@ -2,6 +2,7 @@ const API_MODE_STORAGE_KEY = 'workflow-api-mode';
 const LOCAL_API_BASE = '/api/workflow';
 const LIVE_API_BASE = 'http://188.64.43.112:11000/workflow';
 const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
+const NOMINATIM_REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse';
 
 function readInitialApiMode() {
   if (typeof window === 'undefined') {
@@ -16,6 +17,13 @@ let apiMode = readInitialApiMode();
 
 function getApiBase() {
   return apiMode === 'local' ? LOCAL_API_BASE : LIVE_API_BASE;
+}
+
+function defaultJsonHeaders() {
+  return {
+    Accept: 'application/json',
+    'Accept-Language': typeof navigator !== 'undefined' ? navigator.language || 'de-DE' : 'de-DE',
+  };
 }
 
 export function getApiMode() {
@@ -88,10 +96,22 @@ export const workflowApi = {
         addressdetails: 1,
       },
       {
-        headers: {
-          Accept: 'application/json',
-          'Accept-Language': typeof navigator !== 'undefined' ? navigator.language || 'de-DE' : 'de-DE',
-        },
+        headers: defaultJsonHeaders(),
+      },
+    );
+  },
+  reverseAddressCoordinates({ latitude, longitude }) {
+    return requestJson(
+      NOMINATIM_REVERSE_URL,
+      {
+        lat: latitude,
+        lon: longitude,
+        format: 'jsonv2',
+        zoom: 18,
+        addressdetails: 1,
+      },
+      {
+        headers: defaultJsonHeaders(),
       },
     );
   },

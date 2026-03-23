@@ -1,316 +1,110 @@
 <template>
   <div class="home">
-    <section class="hero-card">
-      <div>
-        <p class="eyebrow">Pendler Alarm</p>
-        <h1>Zug, Bahnhof, Terminort.</h1>
-        <p class="intro">
-          Vue-Frontend fuer kommende Google-Termine. Die Terminadresse wird
-          geokodiert, dem naechsten Bahnhof zugeordnet und gegen die Workflow-API
-          auf die naechsten Verbindungen gerechnet.
-        </p>
-      </div>
-      <div class="hero-actions">
-        <button
-          v-if="!isAuthorized"
-          type="button"
-          class="button-primary"
-          @click="loginWithGoogle"
-        >
-          Mit Google anmelden
-        </button>
-        <template v-else>
-          <button type="button" class="button-secondary" @click="refreshAll">
-            Aktualisieren
-          </button>
-          <button type="button" class="button-secondary" @click="logout">
-            Logout
-          </button>
-        </template>
-        <button type="button" class="button-chip" @click="toggleApiMode">
-          API: {{ apiModeLabel }}
-        </button>
-      </div>
-    </section>
+    <home-hero
+      :is-authorized="isAuthorized"
+      :api-mode-label="apiModeLabel"
+      @login="loginWithGoogle"
+      @refresh="refreshAll"
+      @logout="logout"
+      @toggle-api-mode="toggleApiMode"
+    />
 
     <div v-if="isBusy" class="status-message">Lade Daten...</div>
     <div v-if="errorMessage" class="error">{{ errorMessage }}</div>
 
     <template v-if="isAuthorized">
       <section class="dashboard-grid">
-        <article class="panel panel-events">
-          <div class="panel-head">
-            <div>
-              <p class="section-label">Kommende Termine</p>
-              <h2>Termine mit Reisebezug</h2>
-            </div>
-            <p class="muted">{{ upcomingEvents.length }} mit Ortsangabe</p>
-          </div>
+        <event-list-panel
+          :events="upcomingEvents"
+          :loading="eventsLoading"
+          :selected-event-id="selectedEventId"
+          :decision-loading="decisionLoading"
+          :previews="eventConnectionPreviews"
+          :format-event-date="formatEventDate"
+          :relative-date-label="relativeDateLabel"
+          @select-event="selectEvent"
+          @calculate-for-event="calculateConnectionForEvent"
+        />
 
-          <div v-if="eventsLoading" class="empty-state">Kalender wird geladen...</div>
-          <div v-else-if="upcomingEvents.length === 0" class="empty-state">
-            Keine kommenden Termine mit `location`.
-          </div>
-          <div v-else class="event-list">
-            <button
-              v-for="event in upcomingEvents"
-              :key="event.id"
-              type="button"
-              class="event-card"
-              :class="{ 'event-card--active': selectedEventId === event.id }"
-              @click="selectEvent(event)"
-            >
-              <div class="event-card__top">
-                <div>
-                  <strong>{{ event.summary || 'Ohne Titel' }}</strong>
-                  <p>{{ formatEventDate(event.startDate) }}</p>
-                </div>
-                <span class="badge">{{ relativeDateLabel(event.startDate) }}</span>
-              </div>
-              <p class="event-card__location">{{ event.location }}</p>
-              <p v-if="event.resolvedLocation" class="event-card__meta">
-                {{ event.resolvedLocation.displayName }}
-              </p>
-              <p v-else-if="event.isResolvingLocation" class="event-card__meta">
-                Standort wird aufgeloest...
-              </p>
-              <p
-                v-else-if="event.locationError"
-                class="event-card__meta event-card__meta--error"
-              >
-                {{ event.locationError }}
-              </p>
-            </button>
-          </div>
-        </article>
-
-        <article class="panel panel-control">
-          <div class="panel-head">
-            <div>
-              <p class="section-label">Verbindung</p>
-              <h2>Naechste Option zum Terminort</h2>
-            </div>
-          </div>
-
-          <div v-if="selectedEvent" class="stack">
-            <div class="info-card">
-              <p class="label">Ausgewaehlter Termin</p>
-              <strong>{{ selectedEvent.summary || 'Ohne Titel' }}</strong>
-              <p>{{ formatEventDate(selectedEvent.startDate) }}</p>
-              <p>{{ selectedEvent.location }}</p>
-              <p v-if="selectedEvent.resolvedLocation">
-                Koordinaten:
-                {{ formatCoords(selectedEvent.resolvedLocation.latitude, selectedEvent.resolvedLocation.longitude) }}
-              </p>
-            </div>
-
-            <div class="field">
-              <label for="station-select">Zielbahnhof</label>
-              <select
-                id="station-select"
-                v-model="selectedStationId"
-                :disabled="stationsLoading || stations.length === 0"
-                @change="handleStationChanged"
-              >
-                <option value="">Bahnhof waehlen</option>
-                <option
-                  v-for="station in stations"
-                  :key="station.ifopt"
-                  :value="station.ifopt"
-                >
-                  {{ station.name }} · {{ station.ifopt }}
-                </option>
-              </select>
-              <p v-if="selectedEventNearestStation" class="hint">
-                Naechster Bahnhof zum Terminort:
-                {{ selectedEventNearestStation.name }}
-                ({{ formatDistance(selectedEventNearestDistanceKm) }})
-              </p>
-            </div>
-
-            <div class="field">
-              <label for="train-select">Naechste Verbindung</label>
-              <select
-                id="train-select"
-                v-model="selectedTrainId"
-                :disabled="trainsLoading || trains.length === 0"
-              >
-                <option value="">Verbindung waehlen</option>
-                <option
-                  v-for="train in trains"
-                  :key="train.option_id"
-                  :value="train.option_id"
-                >
-                  {{ train.train_id }} · {{ train.planned_departure }} → {{ train.destination }}
-                </option>
-              </select>
-            </div>
-
-            <div v-if="selectedTrain" class="train-card">
-              <div>
-                <strong>{{ selectedTrain.train_id }}</strong>
-                <p>{{ selectedTrain.destination }}</p>
-              </div>
-              <div class="train-card__meta">
-                <span>Plan {{ selectedTrain.planned_departure }}</span>
-                <span>RT {{ selectedTrain.estimated_departure }}</span>
-                <span>Gl. {{ selectedTrain.platform || '-' }}</span>
-              </div>
-            </div>
-
-            <div class="actions">
-              <button
-                type="button"
-                class="button-primary"
-                :disabled="!canCalculate || decisionLoading"
-                @click="calculateConnectionForSelectedEvent"
-              >
-                {{ decisionLoading ? 'Berechne...' : 'Verbindung berechnen' }}
-              </button>
-              <button
-                type="button"
-                class="button-secondary"
-                :disabled="!selectedEvent || trainsLoading"
-                @click="loadTrainsForSelectedStation"
-              >
-                {{ trainsLoading ? 'Lade Zuege...' : 'Zuege neu laden' }}
-              </button>
-            </div>
-          </div>
-
-          <div v-else class="empty-state">
-            Termin auswaehlen, damit Ort, Bahnhof und Verbindung ermittelt werden.
-          </div>
-        </article>
+        <manual-connection-widget
+          :origin-mode="manualForm.originMode"
+          :origin-input="manualForm.originInput"
+          :destination-input="manualForm.destinationInput"
+          :resolved-origin="manualConnection.origin"
+          :origin-refreshing="manualConnection.originRefreshing"
+          :resolved-destination="manualConnection.destination"
+          :station="manualConnection.station"
+          :distance-label="manualConnection.distanceLabel"
+          :trains="manualConnection.trains"
+          :debug-data="manualConnection.debugData"
+          :loading="manualConnection.loading"
+          :preview-loading="manualConnection.previewLoading"
+          :preview-error="manualConnection.error"
+          :decision-loading="decisionLoading"
+          :format-coords="formatCoords"
+          @resolve="resolveManualConnection"
+          @refresh-origin="refreshCurrentLocation"
+          @calculate="calculateManualConnection"
+          @update:origin-mode="manualForm.originMode = $event"
+          @update:origin-input="manualForm.originInput = $event"
+          @update:destination-input="manualForm.destinationInput = $event"
+        />
       </section>
 
       <section class="results-grid">
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="section-label">Empfehlung</p>
-              <h2>Entscheidung</h2>
-            </div>
-          </div>
+        <decision-panel
+          :decision="decision"
+          :decision-risk-level="decisionRiskLevel"
+          :context-label="decisionContextLabel"
+          :risk-label="riskLabel"
+        />
 
-          <div v-if="decision" class="stack">
-            <div class="decision-hero" :class="`risk-${decisionRiskLevel}`">
-              <p class="label">Empfohlen</p>
-              <strong>
-                {{ decision.recommended.parking }} → {{ decision.recommended.entrance }}
-              </strong>
-              <p>Losfahren: {{ decision.recommended.departure_recommendation }}</p>
-              <p>{{ decision.system_insight.reason }}</p>
-            </div>
-
-            <div class="stats-grid">
-              <div class="stat-card">
-                <span>Bahnhof</span>
-                <strong>{{ decision.selected_station.name }}</strong>
-              </div>
-              <div class="stat-card">
-                <span>Zug</span>
-                <strong>{{ decision.selected_train.train_id }}</strong>
-              </div>
-              <div class="stat-card">
-                <span>Risiko</span>
-                <strong>{{ riskLabel(decision.system_insight.risk_level) }}</strong>
-              </div>
-              <div class="stat-card">
-                <span>Puffer</span>
-                <strong>{{ decision.recommended.buffer }} Min.</strong>
-              </div>
-            </div>
-
-            <div class="option-grid">
-              <div class="option-card">
-                <p class="label">Empfohlen</p>
-                <strong>{{ decision.recommended.parking }}</strong>
-                <p>Eingang {{ decision.recommended.entrance }}</p>
-                <p>Anfahrt {{ decision.recommended.travel_time }} Min.</p>
-                <p>Fussweg {{ decision.recommended.walking_time }} Min.</p>
-              </div>
-              <div class="option-card">
-                <p class="label">Alternativen</p>
-                <div
-                  v-if="decision.alternatives && decision.alternatives.length"
-                  class="stack stack--tight"
-                >
-                  <div
-                    v-for="(item, index) in decision.alternatives.slice(0, 3)"
-                    :key="`${item.parking}-${item.entrance}-${index}`"
-                    class="alt-item"
-                  >
-                    <strong>{{ item.parking }} → {{ item.entrance }}</strong>
-                    <p>
-                      {{ item.travel_time }} Min. Anfahrt · {{ item.walking_time }} Min.
-                      Fussweg
-                    </p>
-                  </div>
-                </div>
-                <p v-else>Keine Alternativen vorhanden.</p>
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="empty-state">
-            Noch keine Berechnung vorhanden.
-          </div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="section-label">Hinweis</p>
-              <h2>Echtzeitmeldung</h2>
-            </div>
-          </div>
-
-          <div v-if="notificationLoading" class="empty-state">
-            Realtime-Hinweis wird geladen...
-          </div>
-          <div
-            v-else-if="commuterNotification && commuterNotification.should_send"
-            class="notification-card"
-            :class="notificationClass"
-          >
-            <div class="notification-card__head">
-              <strong>{{ commuterNotification.short_text }}</strong>
-              <span>
-                {{ commuterNotification.audience === 'planner' ? 'Planung' : 'Pendler' }}
-              </span>
-            </div>
-            <p>{{ commuterNotification.title }}</p>
-            <ul
-              v-if="commuterNotification.details && commuterNotification.details.length"
-              class="detail-list"
-            >
-              <li
-                v-for="(detail, index) in commuterNotification.details"
-                :key="`${detail.icon}-${index}`"
-              >
-                {{ detail.icon }} {{ detail.text }}
-              </li>
-            </ul>
-          </div>
-          <div v-else class="empty-state">
-            Fuer die aktuelle Auswahl liegt keine besondere Meldung vor.
-          </div>
-        </article>
+        <notification-panel
+          :loading="notificationLoading"
+          :notification="commuterNotification"
+          :notification-class="notificationClass"
+        />
       </section>
     </template>
   </div>
 </template>
 
 <script>
+import HomeHero from '../components/home/HomeHero.vue';
+import EventListPanel from '../components/home/EventListPanel.vue';
+import ManualConnectionWidget from '../components/home/ManualConnectionWidget.vue';
+import DecisionPanel from '../components/home/DecisionPanel.vue';
+import NotificationPanel from '../components/home/NotificationPanel.vue';
 import { getApiMode, setApiMode, workflowApi } from '../services/workflowApi';
 
 const AUTH_STORAGE_KEY = 'pendler-alarm-google-auth';
 const LOCATION_CACHE_KEY = 'pendler-alarm-location-cache-v1';
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 1000;
 
+function createInitialManualConnection() {
+  return {
+    loading: false,
+    previewLoading: false,
+    originRefreshing: false,
+    debugData: null,
+    error: '',
+    origin: null,
+    destination: null,
+    station: null,
+    trains: [],
+    distanceLabel: '',
+  };
+}
+
 export default {
   name: 'Home',
+  components: {
+    HomeHero,
+    EventListPanel,
+    ManualConnectionWidget,
+    DecisionPanel,
+    NotificationPanel,
+  },
   data() {
     return {
       accessToken: null,
@@ -319,18 +113,22 @@ export default {
       isLoading: false,
       eventsLoading: false,
       stationsLoading: false,
-      trainsLoading: false,
       decisionLoading: false,
       notificationLoading: false,
       errorMessage: '',
       events: [],
       stations: [],
-      trains: [],
       selectedEventId: '',
-      selectedStationId: '',
-      selectedTrainId: '',
       decision: null,
       commuterNotification: null,
+      decisionContextLabel: '',
+      eventConnectionPreviews: {},
+      manualForm: {
+        originMode: 'current',
+        originInput: '',
+        destinationInput: '',
+      },
+      manualConnection: createInitialManualConnection(),
       apiMode: getApiMode(),
       googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID,
       calendarScope: 'https://www.googleapis.com/auth/calendar',
@@ -343,48 +141,11 @@ export default {
         .sort((left, right) => left.startDate - right.startDate)
         .slice(0, 8);
     },
-    selectedEvent() {
-      return this.events.find((event) => event.id === this.selectedEventId) || null;
-    },
-    selectedStation() {
-      return this.stations.find((station) => station.ifopt === this.selectedStationId) || null;
-    },
-    selectedTrain() {
-      return this.trains.find((train) => train.option_id === this.selectedTrainId) || null;
-    },
-    selectedEventNearestStation() {
-      const event = this.selectedEvent;
-      if (!event || !event.resolvedLocation || this.stations.length === 0) {
-        return null;
-      }
-      return this.findNearestStation(event.resolvedLocation);
-    },
-    selectedEventNearestDistanceKm() {
-      const event = this.selectedEvent;
-      const station = this.selectedEventNearestStation;
-      if (!event || !station || !event.resolvedLocation) {
-        return null;
-      }
-      return this.getDistanceKm(
-        event.resolvedLocation.latitude,
-        event.resolvedLocation.longitude,
-        Number(station.latitude),
-        Number(station.longitude),
-      );
-    },
     decisionRiskLevel() {
       return this.decision?.system_insight?.risk_level || 'medium';
     },
     apiModeLabel() {
       return this.apiMode === 'local' ? 'Lokal' : 'Live';
-    },
-    canCalculate() {
-      return Boolean(
-        this.selectedEvent &&
-          this.selectedEvent.resolvedLocation &&
-          this.selectedStationId &&
-          this.selectedTrainId,
-      );
     },
     isBusy() {
       return this.isLoading || this.eventsLoading || this.stationsLoading;
@@ -407,9 +168,25 @@ export default {
       if (compactMatch) {
         const [, year, month, day, hour, minute, second, zulu] = compactMatch;
         if (zulu) {
-          return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+          return new Date(
+            Date.UTC(
+              Number(year),
+              Number(month) - 1,
+              Number(day),
+              Number(hour),
+              Number(minute),
+              Number(second),
+            ),
+          );
         }
-        return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+        return new Date(
+          Number(year),
+          Number(month) - 1,
+          Number(day),
+          Number(hour),
+          Number(minute),
+          Number(second),
+        );
       }
       const fallback = new Date(input);
       return Number.isNaN(fallback.getTime()) ? null : fallback;
@@ -473,9 +250,9 @@ export default {
     },
     formatDistance(value) {
       if (typeof value !== 'number' || Number.isNaN(value)) {
-        return '-';
+        return '';
       }
-      return value < 1 ? `${Math.round(value * 1000)} m` : `${value.toFixed(1)} km`;
+      return value < 1 ? `${Math.round(value * 1000)} m entfernt` : `${value.toFixed(1)} km entfernt`;
     },
     riskLabel(level) {
       if (level === 'low') {
@@ -643,6 +420,85 @@ export default {
     updateEventState(eventId, patch) {
       this.events = this.events.map((event) => (event.id === eventId ? { ...event, ...patch } : event));
     },
+    updateEventPreview(eventId, patch) {
+      this.eventConnectionPreviews = {
+        ...this.eventConnectionPreviews,
+        [eventId]: {
+          ...(this.eventConnectionPreviews[eventId] || {}),
+          ...patch,
+        },
+      };
+    },
+    matchStationFromText(value) {
+      const input = String(value || '').trim().toLowerCase();
+      if (!input) {
+        return null;
+      }
+
+      const exactMatch = this.stations.find((station) => {
+        return (
+          String(station.ifopt || '').toLowerCase() === input ||
+          String(station.name || '').toLowerCase() === input
+        );
+      });
+      if (exactMatch) {
+        return exactMatch;
+      }
+
+      const partialMatches = this.stations.filter((station) => {
+        return (
+          String(station.name || '').toLowerCase().includes(input) ||
+          String(station.ifopt || '').toLowerCase().includes(input)
+        );
+      });
+
+      return partialMatches.length === 1 ? partialMatches[0] : null;
+    },
+    async resolveLocationText(input, options = {}) {
+      const rawInput = String(input || '').trim();
+      if (!rawInput) {
+        throw new Error(options.emptyMessage || 'Bitte eine Adresse, einen Bahnhof oder Koordinaten eingeben.');
+      }
+
+      const stationMatch = this.matchStationFromText(rawInput);
+      if (stationMatch) {
+        return {
+          latitude: Number(stationMatch.latitude),
+          longitude: Number(stationMatch.longitude),
+          displayName: stationMatch.name,
+          source: 'station',
+          station: stationMatch,
+        };
+      }
+
+      const embedded = this.extractCoordinatesFromText(rawInput);
+      if (embedded) {
+        return {
+          latitude: embedded.latitude,
+          longitude: embedded.longitude,
+          displayName: rawInput,
+          source: 'location-text',
+        };
+      }
+
+      const searchQuery = this.sanitizeLocationQuery(rawInput);
+      if (!searchQuery) {
+        throw new Error(options.invalidMessage || 'Eingabe enthaelt keine geokodierbare Adresse.');
+      }
+
+      const results = await workflowApi.searchAddressCoordinates(searchQuery);
+      const match = Array.isArray(results) ? results[0] : null;
+      if (!match) {
+        throw new Error(options.notFoundMessage || 'Adresse konnte nicht geokodiert werden.');
+      }
+
+      return {
+        latitude: Number(match.lat),
+        longitude: Number(match.lon),
+        displayName: match.display_name || rawInput,
+        source: 'nominatim',
+      };
+    },
     async resolveEventLocation(event) {
       if (!event || !event.location) {
         return null;
@@ -753,6 +609,133 @@ export default {
         return closest;
       }, null);
     },
+    async getCurrentPosition() {
+      if (!navigator.geolocation) {
+        throw new Error('Geolocation wird von diesem Browser nicht unterstuetzt.');
+      }
+
+      return new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            resolve({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              displayName: 'Aktueller Standort',
+              source: 'geolocation',
+            });
+          },
+          () => reject(new Error('Aktueller Standort konnte nicht gelesen werden.')),
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 60000,
+          },
+        );
+      });
+    },
+    async resolveCurrentLocationDetails() {
+      const origin = await this.getCurrentPosition();
+
+      try {
+        const result = await workflowApi.reverseAddressCoordinates({
+          latitude: origin.latitude,
+          longitude: origin.longitude,
+        });
+
+        return {
+          ...origin,
+          address: result?.display_name || '',
+        };
+      } catch (error) {
+        return {
+          ...origin,
+          address: '',
+        };
+      }
+    },
+    async initializeCurrentLocation(options = {}) {
+      const { force = false, silent = true } = options;
+      if (this.manualForm.originMode !== 'current') {
+        return null;
+      }
+      if (this.manualConnection.origin && !force) {
+        return this.manualConnection.origin;
+      }
+
+      this.manualConnection = {
+        ...this.manualConnection,
+        originRefreshing: true,
+      };
+
+      try {
+        const origin = await this.resolveCurrentLocationDetails();
+        this.manualConnection = {
+          ...this.manualConnection,
+          origin,
+          originRefreshing: false,
+        };
+        return origin;
+      } catch (error) {
+        this.manualConnection = {
+          ...this.manualConnection,
+          origin: null,
+          originRefreshing: false,
+        };
+        if (!silent) {
+          this.errorMessage = error.message || 'Aktueller Standort konnte nicht gelesen werden.';
+        }
+        return null;
+      }
+    },
+    async refreshCurrentLocation() {
+      await this.initializeCurrentLocation({ force: true, silent: false });
+    },
+    async fetchTrainsForStation(stationId) {
+      return workflowApi.getTrains({ station_ifopt: stationId });
+    },
+    async ensureEventPreview(event) {
+      this.updateEventPreview(event.id, {
+        loading: true,
+        error: '',
+        trains: [],
+        station: null,
+        distanceLabel: '',
+        debugData: null,
+      });
+
+      try {
+        const resolved = await this.resolveEventLocation(event);
+        const nearestStation = this.findNearestStation(resolved);
+        if (!nearestStation) {
+          throw new Error('Kein passender Bahnhof fuer den Terminort gefunden.');
+        }
+
+        const trainsPayload = await this.fetchTrainsForStation(nearestStation.ifopt);
+        const trains = trainsPayload.trains || [];
+        this.updateEventPreview(event.id, {
+          loading: false,
+          error: '',
+          station: nearestStation,
+          trains,
+          distanceLabel: this.formatDistance(nearestStation.distance),
+          debugData: {
+            station: nearestStation,
+            resolvedOrigin: resolved,
+            trainsResponse: trainsPayload,
+          },
+        });
+      } catch (error) {
+        this.updateEventPreview(event.id, {
+          loading: false,
+          error: error.message || 'Verbindungen konnten nicht geladen werden.',
+          station: null,
+          trains: [],
+          distanceLabel: '',
+          debugData: null,
+        });
+        this.errorMessage = error.message || 'Terminort konnte nicht verarbeitet werden.';
+      }
+    },
     readStoredAuth() {
       const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
       if (!rawValue) return null;
@@ -772,7 +755,10 @@ export default {
     persistAuth(tokenResponse) {
       const expiresIn = Number(tokenResponse.expires_in || 0);
       const expiresAt = Date.now() + Math.max(expiresIn * 1000 - TOKEN_EXPIRY_BUFFER_MS, 0);
-      window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ accessToken: tokenResponse.access_token, expiresAt }));
+      window.localStorage.setItem(
+        AUTH_STORAGE_KEY,
+        JSON.stringify({ accessToken: tokenResponse.access_token, expiresAt }),
+      );
     },
     clearStoredAuth() {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -785,7 +771,11 @@ export default {
             resolve();
           } else {
             existing.addEventListener('load', () => resolve(), { once: true });
-            existing.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+            existing.addEventListener(
+              'error',
+              () => reject(new Error(`Failed to load script: ${src}`)),
+              { once: true },
+            );
           }
           return;
         }
@@ -801,7 +791,11 @@ export default {
           },
           { once: true },
         );
-        script.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+        script.addEventListener(
+          'error',
+          () => reject(new Error(`Failed to load script: ${src}`)),
+          { once: true },
+        );
         document.head.appendChild(script);
       });
     },
@@ -839,12 +833,12 @@ export default {
       this.isAuthorized = false;
       this.events = [];
       this.selectedEventId = '';
-      this.selectedStationId = '';
-      this.selectedTrainId = '';
-      this.trains = [];
       this.decision = null;
       this.commuterNotification = null;
+      this.decisionContextLabel = '';
+      this.eventConnectionPreviews = {};
       this.errorMessage = '';
+      this.manualConnection = createInitialManualConnection();
     },
     async apiFetch(url, options = {}) {
       if (!this.accessToken) {
@@ -883,8 +877,11 @@ export default {
           maxResults: '100',
           timeMin: new Date().toISOString(),
         });
-        const data = await this.apiFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`);
+        const data = await this.apiFetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
+        );
         this.events = this.enrichEvents(data.items || []);
+        this.eventConnectionPreviews = {};
         if (!this.selectedEventId && this.upcomingEvents.length > 0) {
           await this.selectEvent(this.upcomingEvents[0]);
         }
@@ -905,57 +902,17 @@ export default {
         this.stationsLoading = false;
       }
     },
-    async loadTrainsForStation(stationId) {
-      if (!stationId) {
-        this.trains = [];
-        this.selectedTrainId = '';
-        return;
-      }
-
-      this.trainsLoading = true;
-      this.errorMessage = '';
-      try {
-        const payload = await workflowApi.getTrains({ station_ifopt: stationId });
-        this.trains = payload.trains || [];
-        this.selectedTrainId = this.trains[0]?.option_id || '';
-      } catch (error) {
-        this.errorMessage = error.message || 'Zuege konnten nicht geladen werden.';
-      } finally {
-        this.trainsLoading = false;
-      }
-    },
-    async loadTrainsForSelectedStation() {
-      await this.loadTrainsForStation(this.selectedStationId);
-    },
     async selectEvent(event) {
       this.selectedEventId = event.id;
-      this.decision = null;
-      this.commuterNotification = null;
-      this.selectedTrainId = '';
-
-      try {
-        const resolved = await this.resolveEventLocation(event);
-        const nearestStation = this.findNearestStation(resolved);
-        if (nearestStation) {
-          this.selectedStationId = nearestStation.ifopt;
-          await this.loadTrainsForStation(nearestStation.ifopt);
-        }
-      } catch (error) {
-        this.errorMessage = error.message || 'Terminort konnte nicht verarbeitet werden.';
-      }
+      this.errorMessage = '';
+      await this.ensureEventPreview(event);
     },
-    async handleStationChanged() {
-      this.decision = null;
-      this.commuterNotification = null;
-      await this.loadTrainsForStation(this.selectedStationId);
-    },
-    async calculateConnectionForSelectedEvent() {
-      if (!this.canCalculate) {
-        this.errorMessage = 'Terminort, Bahnhof und Verbindung werden fuer die Berechnung benoetigt.';
+    async calculateConnection(origin, station, trainId, contextLabel) {
+      if (!origin || !station || !trainId) {
+        this.errorMessage = 'Startpunkt, Bahnhof und Verbindung werden fuer die Berechnung benoetigt.';
         return;
       }
 
-      const origin = this.selectedEvent.resolvedLocation;
       this.decisionLoading = true;
       this.notificationLoading = true;
       this.errorMessage = '';
@@ -967,20 +924,21 @@ export default {
             origin: originString,
             origin_lat: origin.latitude,
             origin_lon: origin.longitude,
-            train_id: this.selectedTrainId,
-            station_ifopt: this.selectedStationId,
+            train_id: trainId,
+            station_ifopt: station.ifopt,
           }),
           workflowApi.getCommuterNotification({
             origin: originString,
             origin_lat: origin.latitude,
             origin_lon: origin.longitude,
-            train_id: this.selectedTrainId,
-            station_ifopt: this.selectedStationId,
+            train_id: trainId,
+            station_ifopt: station.ifopt,
           }),
         ]);
 
         this.decision = decision;
         this.commuterNotification = notification;
+        this.decisionContextLabel = contextLabel;
       } catch (error) {
         this.errorMessage = error.message || 'Verbindung konnte nicht berechnet werden.';
       } finally {
@@ -988,17 +946,118 @@ export default {
         this.notificationLoading = false;
       }
     },
+    async calculateConnectionForEvent({ event, trainId }) {
+      const preview = this.eventConnectionPreviews[event.id];
+      if (!preview || !preview.station) {
+        this.errorMessage = 'Bitte zuerst die Verbindungen fuer den Termin laden.';
+        return;
+      }
+
+      const origin = event.resolvedLocation || (await this.resolveEventLocation(event));
+      const contextLabel = `${event.summary || 'Ohne Titel'} · ${preview.station.name}`;
+      await this.calculateConnection(origin, preview.station, trainId, contextLabel);
+    },
+    async resolveManualConnection() {
+      this.manualConnection = {
+        ...this.manualConnection,
+        loading: true,
+        previewLoading: true,
+        error: '',
+        trains: [],
+        station: null,
+        distanceLabel: '',
+        debugData: null,
+      };
+      this.errorMessage = '';
+
+      try {
+        const origin = this.manualForm.originMode === 'current'
+          ? (this.manualConnection.origin || (await this.initializeCurrentLocation({ force: true, silent: false })))
+          : await this.resolveLocationText(this.manualForm.originInput, {
+              emptyMessage: 'Bitte einen Startpunkt eingeben.',
+            });
+
+        if (!origin) {
+          throw new Error('Aktueller Standort konnte nicht gelesen werden.');
+        }
+        const destination = await this.resolveLocationText(this.manualForm.destinationInput, {
+          emptyMessage: 'Bitte ein Ziel eingeben.',
+        });
+
+        const station = destination.station || this.findNearestStation(destination);
+        if (!station) {
+          throw new Error('Kein passender Zielbahnhof gefunden.');
+        }
+
+        const trainsPayload = await this.fetchTrainsForStation(station.ifopt);
+        const trains = trainsPayload.trains || [];
+        const distanceKm = destination.station
+          ? 0
+          : this.getDistanceKm(
+              destination.latitude,
+              destination.longitude,
+              Number(station.latitude),
+              Number(station.longitude),
+            );
+
+        this.manualConnection = {
+          loading: false,
+          previewLoading: false,
+          error: '',
+          origin,
+          destination,
+          station,
+          trains,
+          distanceLabel: destination.station ? 'Direkter Bahnhofstreffer' : this.formatDistance(distanceKm),
+          debugData: {
+            origin,
+            destination,
+            station,
+            trainsResponse: trainsPayload,
+          },
+        };
+      } catch (error) {
+        this.manualConnection = {
+          ...this.manualConnection,
+          loading: false,
+          previewLoading: false,
+          error: error.message || 'Manuelle Verbindung konnte nicht geladen werden.',
+          trains: [],
+          station: null,
+          distanceLabel: '',
+          debugData: null,
+        };
+        this.errorMessage = error.message || 'Manuelle Verbindung konnte nicht geladen werden.';
+      }
+    },
+    async calculateManualConnection(trainId) {
+      const { origin, station, destination } = this.manualConnection;
+      if (!origin || !station) {
+        this.errorMessage = 'Bitte zuerst Start und Ziel fuer die manuelle Suche laden.';
+        return;
+      }
+
+      const contextLabel = `${origin.displayName} → ${destination?.displayName || station.name}`;
+      await this.calculateConnection(origin, station, trainId, contextLabel);
+    },
     toggleApiMode() {
       const nextMode = this.apiMode === 'local' ? 'live' : 'local';
       setApiMode(nextMode);
       this.apiMode = nextMode;
-      this.selectedStationId = '';
-      this.selectedTrainId = '';
-      this.trains = [];
       this.decision = null;
       this.commuterNotification = null;
+      this.decisionContextLabel = '';
+      this.eventConnectionPreviews = {};
+      this.manualConnection = {
+        ...this.manualConnection,
+        previewLoading: false,
+        error: '',
+        station: null,
+        trains: [],
+        distanceLabel: '',
+      };
       this.loadStations().then(() => {
-        const currentEvent = this.selectedEvent;
+        const currentEvent = this.upcomingEvents.find((event) => event.id === this.selectedEventId);
         if (currentEvent) {
           this.selectEvent(currentEvent);
         }
@@ -1016,8 +1075,11 @@ export default {
 
     this.isLoading = true;
     try {
-      await this.initGoogleIdentity();
-      await this.loadStations();
+      await Promise.all([
+        this.initGoogleIdentity(),
+        this.loadStations(),
+        this.initializeCurrentLocation(),
+      ]);
       const storedAuth = this.readStoredAuth();
       if (storedAuth) {
         this.accessToken = storedAuth.accessToken;
@@ -1038,99 +1100,6 @@ export default {
   padding: 32px 20px 64px;
 }
 
-.hero-card,
-.panel {
-  border: 1px solid rgba(241, 245, 249, 0.18);
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.72));
-  backdrop-filter: blur(16px);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
-}
-
-.hero-card {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 28px;
-  border-radius: 28px;
-}
-
-.eyebrow,
-.section-label,
-.label {
-  margin: 0;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-size: 12px;
-  color: #93c5fd;
-}
-
-h1,
-h2,
-p {
-  margin: 0;
-}
-
-h1 {
-  margin-top: 10px;
-  font-size: clamp(2rem, 3vw, 3.6rem);
-  line-height: 1;
-}
-
-h2 {
-  font-size: 1.5rem;
-}
-
-.intro {
-  margin-top: 16px;
-  max-width: 780px;
-  color: rgba(226, 232, 240, 0.88);
-  line-height: 1.5;
-}
-
-.hero-actions,
-.actions {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-button,
-select {
-  border: 0;
-  border-radius: 16px;
-}
-
-.button-primary,
-.button-secondary,
-.button-chip {
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease;
-}
-
-.button-primary {
-  background: linear-gradient(135deg, #38bdf8, #2563eb);
-  color: #eff6ff;
-}
-
-.button-secondary {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e2e8f0;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-}
-
-.button-chip {
-  background: rgba(14, 165, 233, 0.12);
-  color: #bae6fd;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-}
-
-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .dashboard-grid,
 .results-grid {
   display: grid;
@@ -1146,181 +1115,6 @@ button:disabled {
   grid-template-columns: 1.15fr 0.85fr;
 }
 
-.panel {
-  border-radius: 24px;
-  padding: 24px;
-}
-
-.panel-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 18px;
-}
-
-.muted,
-.hint,
-.event-card__meta,
-.train-card__meta,
-.empty-state,
-.status-message {
-  color: rgba(226, 232, 240, 0.72);
-}
-
-.event-list,
-.stack {
-  display: grid;
-  gap: 12px;
-}
-
-.stack--tight {
-  gap: 8px;
-}
-
-.event-card,
-.info-card,
-.train-card,
-.stat-card,
-.option-card,
-.notification-card {
-  width: 100%;
-  text-align: left;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  color: #f8fafc;
-  border-radius: 20px;
-  padding: 16px;
-}
-
-.event-card--active {
-  border-color: rgba(56, 189, 248, 0.7);
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.26), rgba(15, 23, 42, 0.3));
-}
-
-.event-card__top {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.event-card__location {
-  margin-top: 12px;
-  color: #f8fafc;
-}
-
-.event-card__meta {
-  margin-top: 8px;
-  font-size: 0.92rem;
-}
-
-.event-card__meta--error {
-  color: #fca5a5;
-}
-
-.badge {
-  align-self: flex-start;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(186, 230, 253, 0.12);
-  color: #bae6fd;
-  font-size: 12px;
-}
-
-.field {
-  display: grid;
-  gap: 8px;
-}
-
-.field label {
-  font-size: 0.95rem;
-  color: #cbd5e1;
-}
-
-.field select {
-  padding: 14px 16px;
-  background: rgba(15, 23, 42, 0.68);
-  color: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-}
-
-.train-card__meta,
-.stats-grid,
-.option-grid,
-.detail-list {
-  display: grid;
-  gap: 10px;
-}
-
-.stats-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.option-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.stat-card span {
-  display: block;
-  color: rgba(226, 232, 240, 0.7);
-  font-size: 0.88rem;
-}
-
-.decision-hero {
-  border-radius: 22px;
-  padding: 18px;
-  color: #0f172a;
-}
-
-.risk-low {
-  background: linear-gradient(135deg, #bbf7d0, #86efac);
-}
-
-.risk-medium {
-  background: linear-gradient(135deg, #fde68a, #fbbf24);
-}
-
-.risk-high {
-  background: linear-gradient(135deg, #fecaca, #f87171);
-}
-
-.alt-item + .alt-item {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
-}
-
-.notification-card__head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.notification-card__head span {
-  font-size: 0.8rem;
-  opacity: 0.85;
-}
-
-.notification-card--critical {
-  background: rgba(127, 29, 29, 0.45);
-  border-color: rgba(248, 113, 113, 0.5);
-}
-
-.notification-card--warning {
-  background: rgba(120, 53, 15, 0.45);
-  border-color: rgba(251, 191, 36, 0.5);
-}
-
-.notification-card--ok {
-  background: rgba(20, 83, 45, 0.45);
-  border-color: rgba(74, 222, 128, 0.5);
-}
-
-.detail-list {
-  padding-left: 18px;
-}
-
 .error {
   margin-top: 16px;
   padding: 14px 16px;
@@ -1330,11 +1124,11 @@ button:disabled {
   border: 1px solid rgba(248, 113, 113, 0.4);
 }
 
-.status-message,
-.empty-state {
+.status-message {
   margin-top: 16px;
   padding: 18px;
   border-radius: 18px;
+  color: rgba(226, 232, 240, 0.72);
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -1348,23 +1142,6 @@ button:disabled {
 @media (max-width: 720px) {
   .home {
     padding: 18px 14px 40px;
-  }
-
-  .hero-card,
-  .panel {
-    padding: 18px;
-    border-radius: 22px;
-  }
-
-  .hero-card,
-  .panel-head,
-  .event-card__top {
-    display: grid;
-  }
-
-  .stats-grid,
-  .option-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>
