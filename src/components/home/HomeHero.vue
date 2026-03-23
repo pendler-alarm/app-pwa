@@ -4,8 +4,8 @@
       <p class="eyebrow">Pendler Alarm</p>
       <h1>Dein Kalender zwischen Gleis und Alltag.</h1>
       <p class="intro">
-        Google Login, Terminvorschau und manuelle Verbindungspruefung in einer
-        kompakten Oberflaeche.
+        Google Login, Terminvorschau und manuelle Verbindungsprüfung in einer
+        kompakten Oberfläche.
       </p>
     </div>
 
